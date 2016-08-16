@@ -23,8 +23,6 @@ export interface OPERATORS {
   '>=': Function
   '<': Function
   '<=': Function
-  'isectEmpty': Function
-  'isectNotEmpty': Function
   'in': Function
   'notIn': Function
   'contains': Function

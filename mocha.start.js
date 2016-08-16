@@ -17,28 +17,18 @@ JSDataAdapterTests.init({
   Adapter: JSDataDocumentDB.DocumentDBAdapter,
   adapterConfig: {
     documentOpts: {
+      db: 'test',
       urlConnection: process.env.DOCUMENT_DB_ENDPOINT,
       auth: {
         masterKey: process.env.DOCUMENT_DB_KEY
       }
     }
   },
-  methods: [
-    'create',
-    'createMany',
-    'count',
-    'destroy',
-    'destroyAll',
-    'find',
-    'findAll',
-    'sum'
-  ],
   // js-data-documentdb does NOT support these features
-  // xfeatures: [
-  //   'findAllLikeOp',
-  //   'filterOnRelations'
-  // ]
-  features: []
+  xfeatures: [
+    'findAllLikeOp',
+    'filterOnRelations'
+  ]
 })
 
 describe('exports', function () {

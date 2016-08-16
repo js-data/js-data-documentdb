@@ -6,13 +6,8 @@ import {
 import {DocumentClient} from 'documentdb'
 import underscore from 'mout/string/underscore'
 
-const R_OPTS_DEFAULTS = {
-  db: 'test'
-}
-const INSERT_OPTS_DEFAULTS = {}
-const UPDATE_OPTS_DEFAULTS = {}
-const DELETE_OPTS_DEFAULTS = {}
-const RUN_OPTS_DEFAULTS = {}
+const REQUEST_OPTS_DEFAULTS = {}
+const FEED_OPTS_DEFAULTS = {}
 
 const checkIfNameExists = function (name, parameters) {
   let exists = false
@@ -50,27 +45,24 @@ const notEqual = function (field, value, parameters, collectionId) {
 }
 
 /**
- * Default predicate functions for the filtering operators.
+ * Default predicate functions for the filtering operators. These produce the
+ * appropriate SQL and add the necessary parameters.
  *
  * @name module:js-data-documentdb.OPERATORS
- * @property {Function} = Equality operator.
- * @property {Function} == Equality operator.
- * @property {Function} != Inequality operator.
- * @property {Function} > "Greater than" operator.
- * @property {Function} >= "Greater than or equal to" operator.
- * @property {Function} < "Less than" operator.
- * @property {Function} <= "Less than or equal to" operator.
- * @property {Function} isectEmpty Operator to test that the intersection
- * between two arrays is empty.
- * @property {Function} isectNotEmpty Operator to test that the intersection
- * between two arrays is NOT empty.
- * @property {Function} in Operator to test whether a value is found in the
+ * @property {function} = Equality operator.
+ * @property {function} == Equality operator.
+ * @property {function} != Inequality operator.
+ * @property {function} > "Greater than" operator.
+ * @property {function} >= "Greater than or equal to" operator.
+ * @property {function} < "Less than" operator.
+ * @property {function} <= "Less than or equal to" operator.
+ * @property {function} in Operator to test whether a value is found in the
  * provided array.
- * @property {Function} notIn Operator to test whether a value is NOT found in
+ * @property {function} notIn Operator to test whether a value is NOT found in
  * the provided array.
- * @property {Function} contains Operator to test whether an array contains the
+ * @property {function} contains Operator to test whether an array contains the
  * provided value.
- * @property {Function} notContains Operator to test whether an array does NOT
+ * @property {function} notContains Operator to test whether an array does NOT
  * contain the provided value.
  */
 export const OPERATORS = {
@@ -92,10 +84,17 @@ export const OPERATORS = {
     return `${collectionId}.${field} <= ${addParameter(field, value, parameters)}`
   },
   'in': function (field, value, parameters, collectionId) {
-    return `${collectionId}.${field} IN ${addParameter(field, value, parameters)}`
+    return `ARRAY_CONTAINS(${addParameter(field, value, parameters)}, ${collectionId}.${field})`
   },
   'notIn': function (field, value, parameters, collectionId) {
-    return `${collectionId}.${field} NOT IN ${addParameter(field, value, parameters)}`
+    // return `${collectionId}.${field} NOT IN ${addParameter(field, value, parameters)}`
+    return `NOT ARRAY_CONTAINS(${addParameter(field, value, parameters)}, ${collectionId}.${field})`
+  },
+  'contains': function (field, value, parameters, collectionId) {
+    return `ARRAY_CONTAINS(${collectionId}.${field}, ${addParameter(field, value, parameters)})`
+  },
+  'notContains': function (field, value, parameters, collectionId) {
+    return `NOT ARRAY_CONTAINS(${collectionId}.${field}, ${addParameter(field, value, parameters)})`
   }
 }
 
@@ -106,33 +105,39 @@ Object.freeze(OPERATORS)
  *
  * @example
  * // Use Container instead of DataStore on the server
- * import {Container} from 'js-data'
- * import {DocumentDBAdapter} from 'js-data-documentdb'
+ * import { Container } from 'js-data';
+ * import { DocumentDBAdapter } from 'js-data-documentdb';
  *
  * // Create a store to hold your Mappers
- * const store = new Container()
+ * const store = new Container();
  *
  * // Create an instance of DocumentDBAdapter with default settings
- * const adapter = new DocumentDBAdapter()
+ * const adapter = new DocumentDBAdapter({
+ *   documentOpts: {
+ *     db: 'mydb',
+ *     urlConnection: process.env.DOCUMENT_DB_ENDPOINT,
+ *     auth: {
+ *       masterKey: process.env.DOCUMENT_DB_KEY
+ *     }
+ *   }
+ * });
  *
  * // Mappers in "store" will use the DocumentDB adapter by default
- * store.registerAdapter('documentdb', adapter, { default: true })
+ * store.registerAdapter('documentdb', adapter, { 'default': true });
  *
  * // Create a Mapper that maps to a "user" table
- * store.defineMapper('user')
+ * store.defineMapper('user');
  *
  * @class DocumentDBAdapter
  * @extends Adapter
- * @param {Object} [opts] Configuration options.
+ * @param {object} [opts] Configuration options.
+ * @param {object} [opts.client] See {@link DocumentDBAdapter#client}.
  * @param {boolean} [opts.debug=false] See {@link Adapter#debug}.
- * @param {Object} [opts.deleteOpts={}] See {@link DocumentDBAdapter#deleteOpts}.
- * @param {Object} [opts.insertOpts={}] See {@link DocumentDBAdapter#insertOpts}.
- * @param {Object} [opts.operators={@link module:js-data-documentdb.OPERATORS}] See {@link DocumentDBAdapter#operators}.
- * @param {Object} [opts.r] See {@link DocumentDBAdapter#r}.
+ * @param {object} [opts.documentOpts={}] See {@link DocumentDBAdapter#documentOpts}.
+ * @param {object} [opts.feedOpts={}] See {@link DocumentDBAdapter#feedOpts}.
+ * @param {object} [opts.operators={@link module:js-data-documentdb.OPERATORS}] See {@link DocumentDBAdapter#operators}.
  * @param {boolean} [opts.raw=false] See {@link Adapter#raw}.
- * @param {Object} [opts.documentOpts={}] See {@link DocumentDBAdapter#documentOpts}.
- * @param {Object} [opts.runOpts={}] See {@link DocumentDBAdapter#runOpts}.
- * @param {Object} [opts.updateOpts={}] See {@link DocumentDBAdapter#updateOpts}.
+ * @param {object} [opts.requestOpts={}] See {@link DocumentDBAdapter#requestOpts}.
  */
 export function DocumentDBAdapter (opts) {
   utils.classCallCheck(this, DocumentDBAdapter)
@@ -145,33 +150,34 @@ export function DocumentDBAdapter (opts) {
      * need to write custom queries.
      *
      * @example <caption>Use default instance.</caption>
-     * import {DocumentDBAdapter} from 'js-data-documentdb'
+     * import { DocumentDBAdapter } from 'js-data-documentdb';
      * const adapter = new DocumentDBAdapter()
-     * adapter.client.createDatabase('foo', function (err, db) {...})
+     * adapter.client.createDatabase('foo', function (err, db) {...});
      *
      * @example <caption>Configure default instance.</caption>
-     * import {DocumentDBAdapter} from 'js-data-documentdb'
+     * import { DocumentDBAdapter } from 'js-data-documentdb';
      * const adapter = new DocumentDBAdapter({
      *   documentOpts: {
-     *     urlConnection: 'your-endpoint',
+     *     db: 'mydb',
+     *     urlConnection: process.env.DOCUMENT_DB_ENDPOINT,
      *     auth: {
-     *       masterKey: '1asdfa8s0dfa9sdf98'
+     *       masterKey: process.env.DOCUMENT_DB_KEY
      *     }
      *   }
-     * })
-     * adapter.client.createDatabase('foo', function (err, db) {...})
+     * });
+     * adapter.client.createDatabase('foo', function (err, db) {...});
      *
      * @example <caption>Provide a custom instance.</caption>
-     * import {DocumentClient} from 'documentdb'
-     * import {DocumentDBAdapter} from 'js-data-documentdb'
+     * import { DocumentClient } from 'documentdb';
+     * import { DocumentDBAdapter } from 'js-data-documentdb';
      * const client = new DocumentClient(...)
      * const adapter = new DocumentDBAdapter({
      *   client: client
-     * })
-     * adapter.client.createDatabase('foo', function (err, db) {...})
+     * });
+     * adapter.client.createDatabase('foo', function (err, db) {...});
      *
-     * @name DocumentDBAdapter#r
-     * @type {Object}
+     * @name DocumentDBAdapter#client
+     * @type {object}
      */
     client: {
       writable: true,
@@ -191,50 +197,30 @@ export function DocumentDBAdapter (opts) {
   Adapter.call(this, opts)
 
   /**
-   * Default options to pass to r#insert.
+   * Default options to pass to DocumentClient requests.
    *
-   * @name DocumentDBAdapter#insertOpts
-   * @type {Object}
+   * @name DocumentDBAdapter#requestOpts
+   * @type {object}
    * @default {}
    */
-  this.insertOpts || (this.insertOpts = {})
-  utils.fillIn(this.insertOpts, INSERT_OPTS_DEFAULTS)
+  this.requestOpts || (this.requestOpts = {})
+  utils.fillIn(this.requestOpts, REQUEST_OPTS_DEFAULTS)
 
   /**
-   * Default options to pass to r#update.
+   * Default options to pass to DocumentClient#queryDocuments.
    *
-   * @name DocumentDBAdapter#updateOpts
-   * @type {Object}
+   * @name DocumentDBAdapter#feedOpts
+   * @type {object}
    * @default {}
    */
-  this.updateOpts || (this.updateOpts = {})
-  utils.fillIn(this.updateOpts, UPDATE_OPTS_DEFAULTS)
-
-  /**
-   * Default options to pass to r#delete.
-   *
-   * @name DocumentDBAdapter#deleteOpts
-   * @type {Object}
-   * @default {}
-   */
-  this.deleteOpts || (this.deleteOpts = {})
-  utils.fillIn(this.deleteOpts, DELETE_OPTS_DEFAULTS)
-
-  /**
-   * Default options to pass to r#run.
-   *
-   * @name DocumentDBAdapter#runOpts
-   * @type {Object}
-   * @default {}
-   */
-  this.runOpts || (this.runOpts = {})
-  utils.fillIn(this.runOpts, RUN_OPTS_DEFAULTS)
+  this.feedOpts || (this.feedOpts = {})
+  utils.fillIn(this.feedOpts, FEED_OPTS_DEFAULTS)
 
   /**
    * Override the default predicate functions for the specified operators.
    *
    * @name DocumentDBAdapter#operators
-   * @type {Object}
+   * @type {object}
    * @default {}
    */
   this.operators || (this.operators = {})
@@ -249,7 +235,8 @@ export function DocumentDBAdapter (opts) {
    *
    * @name DocumentDBAdapter#documentOpts
    * @see http://azure.github.io/azure-documentdb-node/DocumentClient.html
-   * @type {Object}
+   * @type {object}
+   * @property {string} db The default database to use.
    * @property {string} urlConnection The service endpoint to use to create the
    * client.
    * @property {object} auth An object that is used for authenticating requests
@@ -267,7 +254,6 @@ export function DocumentDBAdapter (opts) {
    * the consistency level. It can take any value from ConsistencyLevel.
    */
   this.documentOpts || (this.documentOpts = {})
-  utils.fillIn(this.documentOpts, R_OPTS_DEFAULTS)
 
   if (!this.client) {
     this.client = new DocumentClient(
@@ -297,13 +283,11 @@ Adapter.extend({
     props || (props = {})
     opts || (opts = {})
 
-    const createOpts = this.getOpt('createOpts', opts)
-
     return new utils.Promise((resolve, reject) => {
       this.client.createDocument(
         this.getCollectionLink(mapper, opts),
-        props,
-        createOpts,
+        utils.plainCopy(props),
+        this.getOpt('requestOpts', opts),
         (err, document) => {
           if (err) {
             return reject(err)
@@ -318,9 +302,6 @@ Adapter.extend({
     props || (props = {})
     opts || (opts = {})
 
-    const insertOpts = this.getOpt('insertOpts', opts)
-    insertOpts.returnChanges = true
-
     return utils.Promise.all(props.map((record) => this._create(mapper, record, opts)))
       .then((results) => results.map((result) => result[0]))
       .then((results) => [results, { created: results.length }])
@@ -330,10 +311,10 @@ Adapter.extend({
     opts || (opts = {})
 
     const collLink = this.getCollectionLink(mapper, opts)
-    const deleteOpts = this.getOpt('deleteOpts', opts)
+    const requestOpts = this.getOpt('requestOpts', opts)
 
     return new utils.Promise((resolve, reject) => {
-      this.client.deleteDocument(`${collLink}/docs/${id}`, deleteOpts, (err) => {
+      this.client.deleteDocument(`${collLink}/docs/${id}`, requestOpts, (err) => {
         if (err) {
           if (err.code === 404) {
             return resolve([undefined, { deleted: 0 }])
@@ -360,9 +341,10 @@ Adapter.extend({
     opts || (opts = {})
 
     const docLink = `${this.getCollectionLink(mapper, opts)}/docs/${id}`
+    const requestOpts = this.getOpt('requestOpts', opts)
 
     return new utils.Promise((resolve, reject) => {
-      this.client.readDocument(docLink, (err, document) => {
+      this.client.readDocument(docLink, requestOpts, (err, document) => {
         if (err) {
           if (err.code === 404) {
             return resolve([undefined, { found: 0 }])
@@ -379,12 +361,11 @@ Adapter.extend({
     query || (query = {})
 
     const collLink = this.getCollectionLink(mapper, opts)
-    const queryDocumentsOpts = this.getOpt('queryDocumentsOpts', opts)
-
+    const feedOpts = this.getOpt('feedOpts', opts)
     const querySpec = this.getQuerySpec(mapper, query, opts)
 
     return new utils.Promise((resolve, reject) => {
-      this.client.queryDocuments(collLink, querySpec, queryDocumentsOpts).toArray((err, documents) => {
+      this.client.queryDocuments(collLink, querySpec, feedOpts).toArray((err, documents) => {
         if (err) {
           return reject(err)
         }
@@ -414,22 +395,24 @@ Adapter.extend({
     props || (props = {})
     opts || (opts = {})
 
-    const updateOpts = this.getOpt('updateOpts', opts)
-    updateOpts.returnChanges = true
+    const docLink = `${this.getCollectionLink(mapper, opts)}/docs/${id}`
+    const requestOpts = this.getOpt('requestOpts', opts)
 
-    return this.getCollectionLink(mapper, opts)
-      .get(id)
-      .update(props, updateOpts)
-      .run(this.getOpt('runOpts', opts))
-      .then((cursor) => {
-        let record
-        this._handleErrors(cursor)
-        if (cursor && cursor.changes && cursor.changes.length && cursor.changes[0].new_val) {
-          record = cursor.changes[0].new_val
-        } else {
+    return this._find(mapper, id, opts)
+      .then((result) => {
+        const document = result[0]
+        if (!document) {
           throw new Error('Not Found')
         }
-        return [record, cursor]
+        utils.deepMixIn(document, utils.plainCopy(props))
+        return new utils.Promise((resolve, reject) => {
+          this.client.replaceDocument(docLink, document, requestOpts, (err, updatedDocument) => {
+            if (err) {
+              return reject(err)
+            }
+            return resolve([updatedDocument, { updated: updatedDocument ? 1 : 0 }])
+          })
+        })
       })
   },
 
@@ -438,41 +421,40 @@ Adapter.extend({
     query || (query = {})
     opts || (opts = {})
 
-    const updateOpts = this.getOpt('updateOpts', opts)
-    updateOpts.returnChanges = true
+    props = utils.plainCopy(props)
 
-    return this.filterSequence(this.getCollectionLink(mapper, opts), query)
-      .update(props, updateOpts)
-      .run(this.getOpt('runOpts', opts))
-      .then((cursor) => {
-        let records = []
-        this._handleErrors(cursor)
-        if (cursor && cursor.changes && cursor.changes.length) {
-          records = cursor.changes.map((change) => change.new_val)
-        }
-        return [records, cursor]
+    const requestOpts = this.getOpt('requestOpts', opts)
+    const collLink = this.getCollectionLink(mapper, opts)
+
+    return this._findAll(mapper, query, opts)
+      .then((result) => {
+        const documents = result[0]
+        documents.forEach((document) => {
+          utils.deepMixIn(document, props)
+        })
+        return utils.Promise.all(documents.map((document) => {
+          return new utils.Promise((resolve, reject) => {
+            const docLink = `${collLink}/docs/${document.id}`
+            this.client.replaceDocument(docLink, document, requestOpts, (err, updatedDocument) => {
+              if (err) {
+                return reject(err)
+              }
+              return resolve(updatedDocument)
+            })
+          })
+        }))
       })
+      .then((documents) => [documents, { updated: documents.length }])
   },
 
   _updateMany (mapper, records, opts) {
     records || (records = [])
     opts || (opts = {})
 
-    const insertOpts = this.getOpt('insertOpts', opts)
-    insertOpts.returnChanges = true
-    insertOpts.conflict = 'update'
+    records = records.filter((record) => record && record.id !== undefined)
 
-    return this.getCollectionLink(mapper, opts)
-      .insert(records, insertOpts)
-      .run(this.getOpt('runOpts', opts))
-      .then((cursor) => {
-        records = []
-        this._handleErrors(cursor)
-        if (cursor && cursor.changes && cursor.changes.length) {
-          records = cursor.changes.map((change) => change.new_val)
-        }
-        return [records, cursor]
-      })
+    return utils.Promise.all(records.map((record) => this._update(mapper, record.id, record, opts)))
+      .then((results) => [results.map((result) => result[0]), { updated: results.length }])
   },
 
   _applyWhereFromObject (where) {
@@ -530,9 +512,9 @@ Adapter.extend({
       if (predicateFn) {
         const subSql = predicateFn(fields[i], predicates[i], parameters, collectionId)
         if (isOr) {
-          sql = sql ? `${sql} OR (${subSql})` : subSql
+          sql = sql ? `${sql} OR (${subSql})` : `(${subSql})`
         } else {
-          sql = sql ? `${sql} AND (${subSql})` : subSql
+          sql = sql ? `${sql} AND (${subSql})` : `(${subSql})`
         }
       } else {
         throw new Error(`Operator ${op} not supported!`)
@@ -559,27 +541,27 @@ Adapter.extend({
           sql += ` AND (${subQuery})`
         }
       } else {
-        sql = sql ? sql + ` AND (${subQuery})` : subQuery
+        sql = sql ? sql + ` AND (${subQuery})` : `(${subQuery})`
       }
     }
     return sql
   },
 
   /**
-   * Apply the specified selection query to the provided RQL sequence.
+   * Generate the querySpec object for DocumentClient#queryDocuments.
    *
    * @name DocumentDBAdapter#getQuerySpec
    * @method
-   * @param {Object} mapper The mapper.
-   * @param {Object} [query] Selection query.
-   * @param {Object} [query.where] Filtering criteria.
+   * @param {object} mapper The mapper.
+   * @param {object} [query] Selection query.
+   * @param {object} [query.where] Filtering criteria.
    * @param {string|Array} [query.orderBy] Sorting criteria.
    * @param {string|Array} [query.sort] Same as `query.sort`.
    * @param {number} [query.limit] Limit results.
    * @param {number} [query.skip] Offset results.
    * @param {number} [query.offset] Same as `query.skip`.
-   * @param {Object} [opts] Configuration options.
-   * @param {Object} [opts.operators] Override the default predicate functions
+   * @param {object} [opts] Configuration options.
+   * @param {object} [opts.operators] Override the default predicate functions
    * for specified operators.
    */
   getQuerySpec (mapper, query, opts) {
@@ -629,13 +611,13 @@ Adapter.extend({
     }
 
     // Sort
+    let orderBySql = ''
     if (query.orderBy) {
       if (utils.isString(query.orderBy)) {
         query.orderBy = [
           [query.orderBy, 'asc']
         ]
       }
-      let orderBySql = ''
       for (var i = 0; i < query.orderBy.length; i++) {
         if (utils.isString(query.orderBy[i])) {
           query.orderBy[i] = [query.orderBy[i], 'asc']
@@ -662,10 +644,9 @@ Adapter.extend({
       sql = `TOP ${+query.limit} ${sql}`
     }
 
-    // console.log(`sql: "${sql}"`)
-    // console.log('parameters', JSON.stringify(parameters, null, 2))
+    sql = `SELECT ${sql}` + (orderBySql ? ` ${orderBySql}` : '')
     return {
-      query: `SELECT ${sql}`,
+      query: sql,
       parameters
     }
   },
@@ -744,40 +725,25 @@ Adapter.extend({
     })
   },
 
-  waitForIndex (table, index, opts) {
-    opts || (opts = {})
-    // let db = utils.isUndefined(opts.db) ? this.documentOpts.db : opts.db
-    return this.waitForDb(opts).then(() => this.waitForCollection(table, opts)).then(() => {
-      // this.indices[db] = this.indices[db] || {}
-      // this.indices[db][table] = this.indices[db][table] || {}
-      // if (!this.collections[db][table][index]) {
-      //   this.collections[db][table][index] = this.r.branch(this.r.db(db).table(table).indexList().contains(index), true, this.r.db(db).table(table).indexCreate(index)).run().then(() => {
-      //     return this.r.db(db).table(table).indexWait(index).run()
-      //   })
-      // }
-      // return this.collections[db][table][index]
-    })
-  },
-
   /**
    * Return the number of records that match the selection query.
    *
    * @name DocumentDBAdapter#count
    * @method
-   * @param {Object} mapper the mapper.
-   * @param {Object} [query] Selection query.
-   * @param {Object} [query.where] Filtering criteria.
+   * @param {object} mapper the mapper.
+   * @param {object} [query] Selection query.
+   * @param {object} [query.where] Filtering criteria.
    * @param {string|Array} [query.orderBy] Sorting criteria.
    * @param {string|Array} [query.sort] Same as `query.sort`.
    * @param {number} [query.limit] Limit results.
    * @param {number} [query.skip] Offset results.
    * @param {number} [query.offset] Same as `query.skip`.
-   * @param {Object} [opts] Configuration options.
-   * @param {Object} [opts.operators] Override the default predicate functions
+   * @param {object} [opts] Configuration options.
+   * @param {object} [opts.operators] Override the default predicate functions
    * for specified operators.
    * @param {boolean} [opts.raw=false] Whether to return a more detailed
    * response object.
-   * @param {Object} [opts.runOpts] Options to pass to r#run.
+   * @param {object} [opts.requestOpts] Options to pass to the DocumentClient request.
    * @return {Promise}
    */
   count (mapper, query, opts) {
@@ -793,13 +759,12 @@ Adapter.extend({
    *
    * @name DocumentDBAdapter#create
    * @method
-   * @param {Object} mapper The mapper.
-   * @param {Object} props The record to be created.
-   * @param {Object} [opts] Configuration options.
-   * @param {Object} [opts.insertOpts] Options to pass to r#insert.
+   * @param {object} mapper The mapper.
+   * @param {object} props The record to be created.
+   * @param {object} [opts] Configuration options.
    * @param {boolean} [opts.raw=false] Whether to return a more detailed
    * response object.
-   * @param {Object} [opts.runOpts] Options to pass to r#run.
+   * @param {object} [opts.requestOpts] Options to pass to the DocumentClient request.
    * @return {Promise}
    */
   create (mapper, props, opts) {
@@ -815,13 +780,12 @@ Adapter.extend({
    *
    * @name DocumentDBAdapter#createMany
    * @method
-   * @param {Object} mapper The mapper.
-   * @param {Object} props The records to be created.
-   * @param {Object} [opts] Configuration options.
-   * @param {Object} [opts.insertOpts] Options to pass to r#insert.
+   * @param {object} mapper The mapper.
+   * @param {object} props The records to be created.
+   * @param {object} [opts] Configuration options.
    * @param {boolean} [opts.raw=false] Whether to return a more detailed
    * response object.
-   * @param {Object} [opts.runOpts] Options to pass to r#run.
+   * @param {object} [opts.requestOpts] Options to pass to the DocumentClient request.
    * @return {Promise}
    */
   createMany (mapper, props, opts) {
@@ -837,13 +801,12 @@ Adapter.extend({
    *
    * @name DocumentDBAdapter#destroy
    * @method
-   * @param {Object} mapper The mapper.
+   * @param {object} mapper The mapper.
    * @param {(string|number)} id Primary key of the record to destroy.
-   * @param {Object} [opts] Configuration options.
-   * @param {Object} [opts.deleteOpts] Options to pass to r#delete.
+   * @param {object} [opts] Configuration options.
    * @param {boolean} [opts.raw=false] Whether to return a more detailed
    * response object.
-   * @param {Object} [opts.runOpts] Options to pass to r#run.
+   * @param {object} [opts.requestOpts] Options to pass to the DocumentClient request.
    * @return {Promise}
    */
   destroy (mapper, id, opts) {
@@ -858,21 +821,21 @@ Adapter.extend({
    *
    * @name DocumentDBAdapter#destroyAll
    * @method
-   * @param {Object} mapper the mapper.
-   * @param {Object} [query] Selection query.
-   * @param {Object} [query.where] Filtering criteria.
+   * @param {object} mapper the mapper.
+   * @param {object} [query] Selection query.
+   * @param {object} [query.where] Filtering criteria.
    * @param {string|Array} [query.orderBy] Sorting criteria.
    * @param {string|Array} [query.sort] Same as `query.sort`.
    * @param {number} [query.limit] Limit results.
    * @param {number} [query.skip] Offset results.
    * @param {number} [query.offset] Same as `query.skip`.
-   * @param {Object} [opts] Configuration options.
-   * @param {Object} [opts.deleteOpts] Options to pass to r#delete.
-   * @param {Object} [opts.operators] Override the default predicate functions
+   * @param {object} [opts] Configuration options.
+   * @param {object} [opts.feedOpts] Options to pass to the DocumentClient#queryDocuments.
+   * @param {object} [opts.operators] Override the default predicate functions
    * for specified operators.
    * @param {boolean} [opts.raw=false] Whether to return a more detailed
    * response object.
-   * @param {Object} [opts.runOpts] Options to pass to r#run.
+   * @param {object} [opts.requestOpts] Options to pass to the DocumentClient request.
    * @return {Promise}
    */
   destroyAll (mapper, query, opts) {
@@ -888,37 +851,20 @@ Adapter.extend({
    *
    * @name DocumentDBAdapter#find
    * @method
-   * @param {Object} mapper The mapper.
+   * @param {object} mapper The mapper.
    * @param {(string|number)} id Primary key of the record to retrieve.
-   * @param {Object} [opts] Configuration options.
+   * @param {object} [opts] Configuration options.
    * @param {boolean} [opts.raw=false] Whether to return a more detailed
    * response object.
-   * @param {Object} [opts.runOpts] Options to pass to r#run.
+   * @param {object} [opts.requestOpts] Options to pass to the DocumentClient request.
    * @param {string[]} [opts.with=[]] Relations to eager load.
    * @return {Promise}
    */
   find (mapper, id, opts) {
     opts || (opts = {})
-    opts.with || (opts.with = [])
 
-    const relationList = mapper.relationList || []
-    let tasks = [this.waitForCollection(mapper, opts)]
-
-    relationList.forEach((def) => {
-      const relationName = def.relation
-      const relationDef = def.getRelation()
-      if (!opts.with || opts.with.indexOf(relationName) === -1) {
-        return
-      }
-      if (def.foreignKey && def.type !== 'belongsTo') {
-        if (def.type === 'belongsTo') {
-          tasks.push(this.waitForIndex(mapper.table || underscore(mapper.name), def.foreignKey, opts))
-        } else {
-          tasks.push(this.waitForIndex(relationDef.table || underscore(relationDef.name), def.foreignKey, opts))
-        }
-      }
-    })
-    return Promise.all(tasks).then(() => Adapter.prototype.find.call(this, mapper, id, opts))
+    return this.waitForCollection(mapper, opts)
+      .then(() => Adapter.prototype.find.call(this, mapper, id, opts))
   },
 
   /**
@@ -926,46 +872,30 @@ Adapter.extend({
    *
    * @name DocumentDBAdapter#findAll
    * @method
-   * @param {Object} mapper The mapper.
-   * @param {Object} [query] Selection query.
-   * @param {Object} [query.where] Filtering criteria.
+   * @param {object} mapper The mapper.
+   * @param {object} [query] Selection query.
+   * @param {object} [query.where] Filtering criteria.
    * @param {string|Array} [query.orderBy] Sorting criteria.
    * @param {string|Array} [query.sort] Same as `query.sort`.
    * @param {number} [query.limit] Limit results.
    * @param {number} [query.skip] Offset results.
    * @param {number} [query.offset] Same as `query.skip`.
-   * @param {Object} [opts] Configuration options.
-   * @param {Object} [opts.operators] Override the default predicate functions
+   * @param {object} [opts] Configuration options.
+   * @param {object} [opts.feedOpts] Options to pass to the DocumentClient#queryDocuments.
+   * @param {object} [opts.operators] Override the default predicate functions
    * for specified operators.
    * @param {boolean} [opts.raw=false] Whether to return a more detailed
    * response object.
-   * @param {Object} [opts.runOpts] Options to pass to r#run.
+   * @param {object} [opts.requestOpts] Options to pass to the DocumentClient request.
    * @param {string[]} [opts.with=[]] Relations to eager load.
    * @return {Promise}
    */
   findAll (mapper, query, opts) {
     opts || (opts = {})
-    opts.with || (opts.with = [])
     query || (query = {})
 
-    const relationList = mapper.relationList || []
-    let tasks = [this.waitForCollection(mapper, opts)]
-
-    relationList.forEach((def) => {
-      const relationName = def.relation
-      const relationDef = def.getRelation()
-      if (!opts.with || opts.with.indexOf(relationName) === -1) {
-        return
-      }
-      if (def.foreignKey && def.type !== 'belongsTo') {
-        if (def.type === 'belongsTo') {
-          tasks.push(this.waitForIndex(mapper.table || underscore(mapper.name), def.foreignKey, opts))
-        } else {
-          tasks.push(this.waitForIndex(relationDef.table || underscore(relationDef.name), def.foreignKey, opts))
-        }
-      }
-    })
-    return Promise.all(tasks).then(() => Adapter.prototype.findAll.call(this, mapper, query, opts))
+    return this.waitForCollection(mapper, opts)
+      .then(() => Adapter.prototype.findAll.call(this, mapper, query, opts))
   },
 
   /**
@@ -975,8 +905,8 @@ Adapter.extend({
    * @name DocumentDBAdapter#getOperator
    * @method
    * @param {string} operator The name of the operator.
-   * @param {Object} [opts] Configuration options.
-   * @param {Object} [opts.operators] Override the default predicate functions
+   * @param {object} [opts] Configuration options.
+   * @param {object} [opts.operators] Override the default predicate functions
    * for specified operators.
    * @return {*} The predicate function for the specified operator.
    */
@@ -993,21 +923,22 @@ Adapter.extend({
    *
    * @name DocumentDBAdapter#sum
    * @method
-   * @param {Object} mapper The mapper.
+   * @param {object} mapper The mapper.
    * @param {string} field The field to sum.
-   * @param {Object} [query] Selection query.
-   * @param {Object} [query.where] Filtering criteria.
+   * @param {object} [query] Selection query.
+   * @param {object} [query.where] Filtering criteria.
    * @param {string|Array} [query.orderBy] Sorting criteria.
    * @param {string|Array} [query.sort] Same as `query.sort`.
    * @param {number} [query.limit] Limit results.
    * @param {number} [query.skip] Offset results.
    * @param {number} [query.offset] Same as `query.skip`.
-   * @param {Object} [opts] Configuration options.
-   * @param {Object} [opts.operators] Override the default predicate functions
+   * @param {object} [opts] Configuration options.
+   * @param {object} [opts.feedOpts] Options to pass to the DocumentClient#queryDocuments.
+   * @param {object} [opts.operators] Override the default predicate functions
    * for specified operators.
    * @param {boolean} [opts.raw=false] Whether to return a more detailed
    * response object.
-   * @param {Object} [opts.runOpts] Options to pass to r#run.
+   * @param {object} [opts.requestOpts] Options to pass to the DocumentClient request.
    * @return {Promise}
    */
   sum (mapper, field, query, opts) {
@@ -1023,14 +954,13 @@ Adapter.extend({
    *
    * @name DocumentDBAdapter#update
    * @method
-   * @param {Object} mapper The mapper.
+   * @param {object} mapper The mapper.
    * @param {(string|number)} id The primary key of the record to be updated.
-   * @param {Object} props The update to apply to the record.
-   * @param {Object} [opts] Configuration options.
-   * @param {Object} [opts.updateOpts] Options to pass to r#update.
+   * @param {object} props The update to apply to the record.
+   * @param {object} [opts] Configuration options.
    * @param {boolean} [opts.raw=false] Whether to return a more detailed
    * response object.
-   * @param {Object} [opts.runOpts] Options to pass to r#run.
+   * @param {object} [opts.requestOpts] Options to pass to the DocumentClient request.
    * @return {Promise}
    */
   update (mapper, id, props, opts) {
@@ -1046,22 +976,22 @@ Adapter.extend({
    *
    * @name DocumentDBAdapter#updateAll
    * @method
-   * @param {Object} mapper The mapper.
-   * @param {Object} props The update to apply to the selected records.
-   * @param {Object} [query] Selection query.
-   * @param {Object} [query.where] Filtering criteria.
+   * @param {object} mapper The mapper.
+   * @param {object} props The update to apply to the selected records.
+   * @param {object} [query] Selection query.
+   * @param {object} [query.where] Filtering criteria.
    * @param {string|Array} [query.orderBy] Sorting criteria.
    * @param {string|Array} [query.sort] Same as `query.sort`.
    * @param {number} [query.limit] Limit results.
    * @param {number} [query.skip] Offset results.
    * @param {number} [query.offset] Same as `query.skip`.
-   * @param {Object} [opts] Configuration options.
-   * @param {Object} [opts.operators] Override the default predicate functions
+   * @param {object} [opts] Configuration options.
+   * @param {object} [opts.feedOpts] Options to pass to the DocumentClient#queryDocuments.
+   * @param {object} [opts.operators] Override the default predicate functions
    * for specified operators.
    * @param {boolean} [opts.raw=false] Whether to return a more detailed
    * response object.
-   * @param {Object} [opts.runOpts] Options to pass to r#run.
-   * @param {Object} [opts.updateOpts] Options to pass to r#update.
+   * @param {object} [opts.requestOpts] Options to pass to the DocumentClient request.
    * @return {Promise}
    */
   updateAll (mapper, props, query, opts) {
@@ -1078,13 +1008,12 @@ Adapter.extend({
    *
    * @name DocumentDBAdapter#updateMany
    * @method
-   * @param {Object} mapper The mapper.
+   * @param {object} mapper The mapper.
    * @param {Object[]} records The records to update.
-   * @param {Object} [opts] Configuration options.
-   * @param {Object} [opts.insertOpts] Options to pass to r#insert.
+   * @param {object} [opts] Configuration options.
    * @param {boolean} [opts.raw=false] Whether to return a more detailed
    * response object.
-   * @param {Object} [opts.runOpts] Options to pass to r#run.
+   * @param {object} [opts.requestOpts] Options to pass to the DocumentClient request.
    * @return {Promise}
    */
   updateMany (mapper, records, opts) {
@@ -1108,7 +1037,7 @@ Adapter.extend({
  * console.log(version.full)
  *
  * @name module:js-data-documentdb.version
- * @type {Object}
+ * @type {object}
  * @property {string} version.full The full semver value.
  * @property {number} version.major The major version number.
  * @property {number} version.minor The minor version number.
@@ -1143,12 +1072,28 @@ export const version = '<%= version %>'
  * npm i --save js-data-documentdb js-data documentdb
  *
  * @example <caption>ES2015 modules import</caption>
- * import {DocumentDBAdapter} from 'js-data-documentdb'
- * const adapter = new DocumentDBAdapter()
+ * import { DocumentDBAdapter } from 'js-data-documentdb'
+ * const adapter = new DocumentDBAdapter({
+ *   documentOpts: {
+ *     db: 'mydb',
+ *     urlConnection: process.env.DOCUMENT_DB_ENDPOINT,
+ *     auth: {
+ *       masterKey: process.env.DOCUMENT_DB_KEY
+ *     }
+ *   }
+ * })
  *
  * @example <caption>CommonJS import</caption>
  * var DocumentDBAdapter = require('js-data-documentdb').DocumentDBAdapter
- * var adapter = new DocumentDBAdapter()
+ * var adapter = new DocumentDBAdapter({
+ *   documentOpts: {
+ *     db: 'mydb',
+ *     urlConnection: process.env.DOCUMENT_DB_ENDPOINT,
+ *     auth: {
+ *       masterKey: process.env.DOCUMENT_DB_KEY
+ *     }
+ *   }
+ * })
  *
  * @module js-data-documentdb
  */
@@ -1158,7 +1103,7 @@ export const version = '<%= version %>'
  * @example <caption>DocumentDBAdapter.extend</caption>
  * // Normally you would do: import {DocumentDBAdapter} from 'js-data-documentdb'
  * const JSDataDocumentDB = require('js-data-documentdb')
- * const {DocumentDBAdapter} = JSDataDocumentDB
+ * const { DocumentDBAdapter } = JSDataDocumentDB
  * console.log('Using JSDataDocumentDB v' + JSDataDocumentDB.version.full)
  *
  * // Extend the class using ES2015 class syntax.
@@ -1166,7 +1111,15 @@ export const version = '<%= version %>'
  *   foo () { return 'bar' }
  *   static beep () { return 'boop' }
  * }
- * const customDocumentDBAdapter = new CustomDocumentDBAdapterClass()
+ * const customDocumentDBAdapter = new CustomDocumentDBAdapterClass({
+ *   documentOpts: {
+ *     db: 'mydb',
+ *     urlConnection: process.env.DOCUMENT_DB_ENDPOINT,
+ *     auth: {
+ *       masterKey: process.env.DOCUMENT_DB_KEY
+ *     }
+ *   }
+ * })
  * console.log(customDocumentDBAdapter.foo())
  * console.log(CustomDocumentDBAdapterClass.beep())
  *
@@ -1176,7 +1129,15 @@ export const version = '<%= version %>'
  * }, {
  *   beep () { return 'boop' }
  * })
- * const otherDocumentDBAdapter = new OtherDocumentDBAdapterClass()
+ * const otherDocumentDBAdapter = new OtherDocumentDBAdapterClass({
+ *   documentOpts: {
+ *     db: 'mydb',
+ *     urlConnection: process.env.DOCUMENT_DB_ENDPOINT,
+ *     auth: {
+ *       masterKey: process.env.DOCUMENT_DB_KEY
+ *     }
+ *   }
+ * })
  * console.log(otherDocumentDBAdapter.foo())
  * console.log(OtherDocumentDBAdapterClass.beep())
  *
@@ -1191,17 +1152,25 @@ export const version = '<%= version %>'
  * }, {
  *   beep () { return 'boop' }
  * })
- * const anotherDocumentDBAdapter = new AnotherDocumentDBAdapterClass()
+ * const anotherDocumentDBAdapter = new AnotherDocumentDBAdapterClass({
+ *   documentOpts: {
+ *     db: 'mydb',
+ *     urlConnection: process.env.DOCUMENT_DB_ENDPOINT,
+ *     auth: {
+ *       masterKey: process.env.DOCUMENT_DB_KEY
+ *     }
+ *   }
+ * })
  * console.log(anotherDocumentDBAdapter.created_at)
  * console.log(anotherDocumentDBAdapter.foo())
  * console.log(AnotherDocumentDBAdapterClass.beep())
  *
  * @method DocumentDBAdapter.extend
- * @param {Object} [props={}] Properties to add to the prototype of the
+ * @param {object} [props={}] Properties to add to the prototype of the
  * subclass.
- * @param {Object} [props.constructor] Provide a custom constructor function
+ * @param {object} [props.constructor] Provide a custom constructor function
  * to be used as the subclass itself.
- * @param {Object} [classProps={}] Static properties to add to the subclass.
+ * @param {object} [classProps={}] Static properties to add to the subclass.
  * @returns {Constructor} Subclass of this DocumentDBAdapter class.
  * @since 3.0.0
  */
