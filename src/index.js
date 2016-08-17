@@ -1,9 +1,9 @@
-import {utils} from 'js-data'
+import { utils } from 'js-data'
 import {
   Adapter,
   reserved
 } from 'js-data-adapter'
-import {DocumentClient} from 'documentdb'
+import { DocumentClient } from 'documentdb'
 import underscore from 'mout/string/underscore'
 
 const REQUEST_OPTS_DEFAULTS = {}
