@@ -590,12 +590,25 @@ jsDataAdapter.Adapter.extend({
     query.orderBy || (query.orderBy = query.sort);
     query.orderBy || (query.orderBy = []);
     query.skip || (query.skip = query.offset);
-    var collectionId = mapper.collection || underscore(mapper.name);
 
-    var select = opts.select || '*';
-    var sql = select + ' FROM ' + collectionId;
+    if (jsData.utils.isString(opts.fields)) {
+      opts.fields = [opts.fields];
+    }
+
+    var collectionId = mapper.collection || underscore(mapper.name);
+    var select = '*';
     var whereSql = void 0;
     var parameters = [];
+
+    if (jsData.utils.isString(opts.select)) {
+      select = opts.select;
+    } else if (jsData.utils.isArray(opts.fields)) {
+      select = opts.fields.map(function (field) {
+        return collectionId + '.' + field;
+      }).join(',');
+    }
+
+    var sql = select + ' FROM ' + collectionId;
 
     // Transform non-keyword properties to "where" clause configuration
     jsData.utils.forOwn(query, function (config, keyword) {
@@ -923,11 +936,15 @@ jsDataAdapter.Adapter.extend({
    * @param {number} [query.offset] Same as `query.skip`.
    * @param {object} [opts] Configuration options.
    * @param {object} [opts.feedOpts] Options to pass to the DocumentClient#queryDocuments.
+   * @param {string[]} [opts.fields] Choose which fields should be returned from
+   * the SQL query, e.g. ["id", "name"].
    * @param {object} [opts.operators] Override the default predicate functions
    * for specified operators.
    * @param {boolean} [opts.raw=false] Whether to return a more detailed
    * response object.
    * @param {object} [opts.requestOpts] Options to pass to the DocumentClient request.
+   * @param {string} [opts.select] Override the SELECT string in the resulting
+   * SQL query, e.g. "users.id,users.name".
    * @param {string[]} [opts.with=[]] Relations to eager load.
    * @return {Promise}
    */
@@ -1109,7 +1126,7 @@ jsDataAdapter.Adapter.extend({
  * otherwise `false` if the current version is not beta.
  */
 var version = {
-  full: '1.0.0-rc.1',
+  full: '1.0.0-rc.2',
   major: 1,
   minor: 0,
   patch: 0
