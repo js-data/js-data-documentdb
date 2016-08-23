@@ -76,3 +76,76 @@ describe('exports', function () {
     assert(JSDataDocumentDB.version)
   })
 })
+
+describe('DocumentDBAdapter#getQuerySpec', function () {
+  it('should allow select to be overridden', function () {
+    const User = this.$$User
+    const adapter = this.$$adapter
+    let userId
+
+    let props = { name: 'John' }
+    assert.debug('findAll', User.name, { age: 30 })
+    return adapter.findAll(User, { age: 30 })
+      .then((users) => {
+        assert.debug('found', User.name, users)
+        assert.equal(users.length, 0, 'users.length')
+
+        assert.debug('create', User.name, props)
+        return adapter.create(User, props)
+      })
+      .then((user) => {
+        assert.debug('created', User.name, user)
+        userId = user[User.idAttribute]
+
+        assert.debug('findAll', User.name, { name: 'John' })
+        return adapter.findAll(User, { name: 'John' }, { select: 'user.id' })
+      })
+      .then((users2) => {
+        assert.debug('found', User.name, users2)
+        assert.objectsEqual(users2, [
+          {
+            id: users2[0].id
+          }
+        ], 'Only id was selected')
+
+        assert.equal(users2.length, 1, 'users2.length')
+        assert.equal(users2[0][User.idAttribute], userId, 'users2[0][User.idAttribute]')
+        assert.equal(users2[0].name, undefined, 'name was not selected')
+      })
+  })
+  it('should allow certain fields to be selected', function () {
+    const User = this.$$User
+    const adapter = this.$$adapter
+    let userId
+
+    let props = { name: 'John' }
+    assert.debug('findAll', User.name, { age: 30 })
+    return adapter.findAll(User, { age: 30 })
+      .then((users) => {
+        assert.debug('found', User.name, users)
+        assert.equal(users.length, 0, 'users.length')
+
+        assert.debug('create', User.name, props)
+        return adapter.create(User, props)
+      })
+      .then((user) => {
+        assert.debug('created', User.name, user)
+        userId = user[User.idAttribute]
+
+        assert.debug('findAll', User.name, { name: 'John' })
+        return adapter.findAll(User, { name: 'John' }, { fields: ['id'] })
+      })
+      .then((users2) => {
+        assert.debug('found', User.name, users2)
+        assert.objectsEqual(users2, [
+          {
+            id: users2[0].id
+          }
+        ], 'Only id was selected')
+
+        assert.equal(users2.length, 1, 'users2.length')
+        assert.equal(users2[0][User.idAttribute], userId, 'users2[0][User.idAttribute]')
+        assert.equal(users2[0].name, undefined, 'name was not selected')
+      })
+  })
+})
