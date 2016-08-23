@@ -1,9 +1,9 @@
-import {utils} from 'js-data'
+import { utils } from 'js-data'
 import {
   Adapter,
   reserved
 } from 'js-data-adapter'
-import {DocumentClient} from 'documentdb'
+import { DocumentClient } from 'documentdb'
 import underscore from 'mout/string/underscore'
 
 const REQUEST_OPTS_DEFAULTS = {}
@@ -572,12 +572,23 @@ Adapter.extend({
     query.orderBy || (query.orderBy = query.sort)
     query.orderBy || (query.orderBy = [])
     query.skip || (query.skip = query.offset)
-    const collectionId = mapper.collection || underscore(mapper.name)
 
-    const select = opts.select || '*'
-    let sql = `${select} FROM ${collectionId}`
+    if (utils.isString(opts.fields)) {
+      opts.fields = [opts.fields]
+    }
+
+    const collectionId = mapper.collection || underscore(mapper.name)
+    let select = '*'
     let whereSql
     const parameters = []
+
+    if (utils.isString(opts.select)) {
+      select = opts.select
+    } else if (utils.isArray(opts.fields)) {
+      select = opts.fields.map((field) => `${collectionId}.${field}`).join(',')
+    }
+
+    let sql = `${select} FROM ${collectionId}`
 
     // Transform non-keyword properties to "where" clause configuration
     utils.forOwn(query, (config, keyword) => {
@@ -882,11 +893,15 @@ Adapter.extend({
    * @param {number} [query.offset] Same as `query.skip`.
    * @param {object} [opts] Configuration options.
    * @param {object} [opts.feedOpts] Options to pass to the DocumentClient#queryDocuments.
+   * @param {string[]} [opts.fields] Choose which fields should be returned from
+   * the SQL query, e.g. ["id", "name"].
    * @param {object} [opts.operators] Override the default predicate functions
    * for specified operators.
    * @param {boolean} [opts.raw=false] Whether to return a more detailed
    * response object.
    * @param {object} [opts.requestOpts] Options to pass to the DocumentClient request.
+   * @param {string} [opts.select] Override the SELECT string in the resulting
+   * SQL query, e.g. "users.id,users.name".
    * @param {string[]} [opts.with=[]] Relations to eager load.
    * @return {Promise}
    */
